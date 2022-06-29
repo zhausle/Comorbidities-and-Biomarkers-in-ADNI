@@ -2,246 +2,120 @@ library(ADNIMERGE)
 library(tidyverse)
 library(transplantr)
 
+## would recommend downloading fresh copies of below files from ADNI 
+## as a rule, I try to use .csv instead of ADNImerge because ADNImerge data is labelled and consequently doesn't play well with many functions in R
+
+init_health<-readr::read_delim("~/Projects/Comorbidities Project/INITHEALTH.csv")
+rec_hist<- readr::read_delim("~/Projects/Comorbidities Project/RECMHIST.csv")
+
+## creates dataframes with cleaned date formats for initial health and recent medical history
+
+init_health <- init_health %>% dplyr::mutate(
+  onset=case_when(
+    (is.na(IHDTONSET)) ~ USERDATE,
+    (lubridate::month(IHDTONSET)==7 & (lubridate::day(IHDTONSET)==2|lubridate::day(IHDTONSET)==1)) ~ lubridate::ceiling_date(init_health$IHDTONSET,unit="years"), ## Initial health incorrectly has most records as having onset/cease dates of 7/1 or 7/2
+    (!is.na(IHDTONSET)) ~ lubridate::ymd(IHDTONSET)
+                  ),
+  cease=case_when(
+      (lubridate::month(IHCEASE)==7 & (lubridate::day(IHCEASE)==2|lubridate::day(IHCEASE)==1)) ~ lubridate::floor_date(init_health$IHCEASE,unit="years"), ## Initial health incorrectly has most records as having onset/cease dates of 7/1 or 7/2
+      (!is.na(IHCEASE)) ~ lubridate::ymd(IHCEASE)
+)
+)
+
+rec_hist$MHDTONSET<-ifelse(rec_hist$MHDTONSET=="x1",NA,rec_hist$MHDTONSET)
+rec_hist$MHDTONSET<-ifelse(rec_hist$MHDTONSET=="x4",NA,rec_hist$MHDTONSET)
+
+rec_hist$onset_year<-lubridate::year(strptime(stringr::str_sub(start=-4,rec_hist$MHDTONSET),format="%Y"))
+rec_hist$onset_month<-lubridate::month(strptime(paste(stringr::str_sub(end=2,rec_hist$MHDTONSET),"01",stringr::str_sub(start=-4,rec_hist$MHDTONSET),sep="-"),format="%m-%d-%Y"))
+rec_hist$onset_day<-lubridate::day(strptime(stringr::str_sub(start=4,end=5,rec_hist$MHDTONSET),format="%d"))
+
+rec_hist <- rec_hist %>% dplyr::mutate(onset=case_when(
+    (is.na(onset_year)) ~ USERDATE,
+    (is.na(onset_month)) ~ lubridate::ceiling_date(lubridate::ymd(paste(onset_year,"01","01",sep="-")),unit="years"),
+    (is.na(onset_day)) ~ lubridate::ceiling_date(lubridate::ymd(paste(onset_year,onset_month,"01",sep="-")),unit="months"),
+    (!is.na(onset_day)) ~ lubridate::mdy(MHDTONSET)
+    ))
+
+rec_hist_scraper<- rec_hist %>%
+  dplyr::filter(MHCUR == 1) %>%
+  dplyr::select(RID, VISCODE2, onset, MHDESC,USERDATE) %>%
+  dplyr::rename(viscode=VISCODE2,desc=MHDESC)
+
+init_health_scraper <- init_health %>%
+  dplyr::select(RID, VISCODE2, onset, cease, IHDESC,USERDATE) %>%
+  dplyr::rename(viscode=VISCODE2,desc=IHDESC)
+
+merged_health_scraper<- dplyr::bind_rows(rec_hist_scraper,init_health_scraper)
+
 adni_condition_scrape <-
   function(condition_name,
            include_words,
-           exclude_words,
-           excluded_records) {
-    find.package("ADNIMERGE")
+           exclude_words=NULL) {
     find.package("tidyverse")
-    
-    init_health <- ADNIMERGE::inithealth
-    rec_hist <- ADNIMERGE::recmhist
-    
-    init_health$est_onset_date <-
-      as.Date((ifelse(
-        is.na(stringr::str_detect(init_health$IHDTONSET, "xx-xx")),
-        init_health$USERDATE,
-        ifelse((stringr::str_detect(init_health$IHDTONSET, "xx")) ==
-                 FALSE,
-               as.Date(strptime(init_health$IHDTONSET,
-                                format = "%Y-%m-%d")),
-               ifelse((stringr::str_detect(init_health$IHDTONSET, "xx-xx")) ==
-                        TRUE,
-                      lubridate::ceiling_date((as.Date(
-                        strptime(init_health$IHDTONSET, format = "%Y")
-                      )), unit = "years"),
-                      lubridate::ceiling_date(lubridate::ym(init_health$IHDTONSET), unit =
-                                                "months")
-               )
-        )
-      )),
-      origin = "1970-01-01")
-    
-    init_health$est_cease_date <-
-      as.Date((ifelse(
-        is.na(stringr::str_detect(init_health$IHCEASE, "xx-xx")),
-        as.Date("2100-12-31"),
-        ifelse((stringr::str_detect(init_health$IHCEASE, "xx")) ==
-                 FALSE,
-               as.Date(strptime(init_health$IHCEASE,
-                                format = "%Y-%m-%d")),
-               ifelse((stringr::str_detect(init_health$IHCEASE, "xx-xx")) ==
-                        TRUE,
-                      lubridate::floor_date((as.Date(
-                        strptime(init_health$IHCEASE, format = "%Y")
-                      )), unit = "years"),
-                      lubridate::ceiling_date(lubridate::ym(init_health$IHCEASE), unit =
-                                                "months")
-               )
-        )
-      )),
-      origin = "1970-01-01")
-    
-    ## this bit of code is meant to work around an error thrown by stringr::ceiling_date for recent medical history
-    
-    rec_hist$ceilinged_onset <- lubridate::ymd(lubridate::year(rec_hist$MHDTONSET),
-                                               truncated = 2L) + lubridate::years(1)
-    
-    rec_hist$est_onset_date <-
-      as.Date(ifelse(
-        is.na(rec_hist$MHDTONSET),
-        rec_hist$USERDATE,
-        rec_hist$ceilinged_onset
-      ),
-      origin = "1970-01-01")
     
     include_words_case_insensitive <-
       paste(paste0("(?i)", include_words), collapse = "|")
-    init_health$condition <-
+
+    merged_health_scraper$condition <-
       ifelse(
         stringr::str_detect(
-          stringr::str_to_lower(init_health$IHDESC),
-          include_words_case_insensitive
-        ),
-        1,
-        0
-      )
-    rec_hist$condition <-
-      ifelse(
-        stringr::str_detect(
-          stringr::str_to_lower(rec_hist$MHDESC),
+          stringr::str_to_lower(merged_health_scraper$desc),
           include_words_case_insensitive
         ),
         1,
         0
       )
     
-    if (!missing(exclude_words)) {
+    if (!is.null(exclude_words)) {
       exclude_words_case_insensitive <-
         paste(paste0("(?i)", exclude_words), collapse = "|")
-      init_health$condition <-
+      merged_health_scraper$condition <-
         ifelse(
-          stringr::str_detect(inithealth$IHDESC, exclude_words_case_insensitive),
+          stringr::str_detect(merged_health_scraper$desc, exclude_words_case_insensitive),
           0,
-          init_health$condition
-        )
-      rec_hist$condition <-
-        ifelse(
-          stringr::str_detect(rec_hist$MHDESC, exclude_words_case_insensitive),
-          0,
-          rec_hist$condition
+          merged_health_scraper$condition
         )
     }
+    merged_dates <- merged_health_scraper %>% dplyr::filter(condition==1)
     
-    init_health_reduced <- init_health %>%
-      dplyr::filter(condition == 1) %>%
-      dplyr::select(RID, VISCODE, est_onset_date, est_cease_date, IHDESC)
-    
-    rec_hist$est_cease_date <- as.Date("2100-12-31")
-    rec_hist_reduced <- rec_hist %>%
-      dplyr::filter(MHCUR == "Yes" & condition == 1) %>%
-      dplyr::select(RID, VISCODE, est_onset_date, est_cease_date, MHDESC)
-    
-    colnames(init_health_reduced) <-
-      c("RID", "viscode", "onset", "cease", "desc")
-    colnames(rec_hist_reduced) <-
-      c("RID", "viscode", "onset", "cease", "desc")
-    
-    merged_recs <-
-      rbind.data.frame(init_health_reduced, rec_hist_reduced)
-    merged_dates <-
-      merged_recs %>% dplyr::group_by(RID) %>% dplyr::mutate(cease = min(cease))
-    merged_dates <-
-      merged_dates %>% dplyr::arrange(onset) %>% dplyr::distinct_at(vars(RID), .keep_all =
-                                                                      TRUE)
-    
-    colnames(merged_dates) <-
-      c(
-        "RID",
-        "viscode",
-        paste0(condition_name, "_onset"),
-        paste0(condition_name, "_cease"),
-        paste0(condition_name, "_desc")
-      )
-    
+merged_dates<-list(df=merged_dates,condition=condition_name)
     return(merged_dates)
   }
 
 
 adni_condition_merge <-
   function(biomarker_data,
-           condition_data,
-           condition_name) {
-    merged_data <-
-      dplyr::left_join(biomarker_data, condition_data, by = "RID")
-    merged_data$condition <- as.numeric(
-      merged_data %>% dplyr::select(EXAMDATE) >= merged_data %>% dplyr::select(paste0(condition_name, "_onset"))
-      &
-        merged_data %>% dplyr::select(EXAMDATE) < merged_data %>% dplyr::select(paste0(condition_name, "_cease"))
-    )
-    merged_data$condition <-
-      ifelse(is.na(merged_data$condition), 0, merged_data$condition)
-    colnames(merged_data)[which(colnames(merged_data) == "condition")] <-
-      condition_name
+           condition_list) {
+    matched_records <-
+      dplyr::left_join(biomarker_data, condition_list$df, by = "RID")
+    condition_name<-condition_list$condition
+    condition_name_enquo<-quo_name(condition_list$condition)
+    
+    matched_records <-date_comparison(matched_records,EXAMDATE,USERDATE,vars(RID,EXAMDATE),comp_method="before") %>% dplyr::filter(retain_flag==1|alt_flag==1) %>% dplyr::select(RID,EXAMDATE,onset,cease,viscode,desc)
+
+    merged_data <- dplyr::left_join(biomarker_data,matched_records,by=c("RID","EXAMDATE"))
+    
+    merged_data <- merged_data %>% dplyr::mutate(condition=case_when(
+                (is.na(onset)) ~ 0,
+                (is.na(cease) & EXAMDATE>=onset) ~ 1,
+                (!is.na(cease) & EXAMDATE>=onset & EXAMDATE<cease) ~ 1,
+                TRUE ~ 0
+    )) %>% dplyr::rename_with(.cols=c(onset,cease,viscode,desc),.fn = ~ paste0(condition_name,"_",.x))  %>% dplyr::rename((!!condition_name_enquo):=condition)
     return(merged_data)
   }
 
 adni_merge <- ADNIMERGE::adnimerge
 adni_merge_demog <- ADNIMERGE::ptdemog %>% dplyr::filter(VISCODE != "f")
 adni_lab_data <- ADNIMERGE::labdata %>% dplyr::filter(VISCODE != "f")
-bateman_abeta_ratio <- ADNIMERGE::batemanlab
-washu_abeta_ratio <- ADNIMERGE::plasma_abeta_project_wash_u
-bateman_abeta_ratio <-
-  readr::read_delim("~/Downloads/batemanlab_20190621.csv")
-adni_web_demog <-
-  readr::read_delim("~/Downloads/PTDEMOG.csv") %>% dplyr::filter(VISCODE !=
-                                                                   "f")
-
-upenn_mk_12 <-readr::read_delim("~/Downloads/UPENNBIOMK12_01_04_21.csv")
-upenn_mk_10 <-readr::read_delim("~/Downloads/UPENNBIOMK10_07_29_19.csv") %>% dplyr::rename(EXAMDATE=DRAWDATE,ABETA=ABETA42)
-upenn_mk_9 <-readr::read_delim("~/Downloads/UPENNBIOMK9_04_19_17.csv")
-
-
-upenn_mk_9 <- upenn_mk_9 %>% dplyr::mutate(ABETA=as.numeric(ABETA),TAU=as.numeric(TAU),PTAU=as.numeric(PTAU))
-upenn_mk_9$ABETA <- ifelse(is.na(upenn_mk_9$ABETA),readr::parse_number(upenn_mk_9$COMMENT),upenn_mk_9$ABETA)
-
+bateman_plasma <- ADNIMERGE::batemanlab
+washu_plasma <- ADNIMERGE::plasma_abeta_project_wash_u
 
 adni_mod_hach <- ADNIMERGE::modhach %>% dplyr::filter(VISCODE != "f")
 adni_vitals <- ADNIMERGE::vitals %>% dplyr::filter(VISCODE != "f")
 
-
-## only has ADNI data
-upenn_adni_dian <-
-  readr::read_delim("~/Downloads/UPENNBIOMKADNIDIAN2017.csv")
-
-upenn_merged_csf_biomarkers <- dplyr::bind_rows(upenn_mk_12,upenn_mk_10,upenn_mk_9)
-upenn_merged_csf_biomarkers <- upenn_merged_csf_biomarkers %>% dplyr::select(-VISCODE) %>% dplyr::rename(VISCODE=VISCODE2)
-upenn_merged_csf_biomarkers <- upenn_merged_csf_biomarkers %>% dplyr::mutate(ABETA=round(ABETA))
-upenn_merged_csf_biomarkers <- upenn_merged_csf_biomarkers %>% dplyr::group_by(RID,EXAMDATE) %>% dplyr::filter(RUNDATE==max(RUNDATE)) %>% dplyr::ungroup()
-
-bateman_abeta_ratio <-
-  bateman_abeta_ratio %>% dplyr::rename(abeta_ratio = RATIO_ABETA42_40_BY_ISTD_TOUSE)
-washu_abeta_ratio <-
-  washu_abeta_ratio %>% dplyr::rename(abeta_ratio = STANDARDIZED_PLASMAAB4240)
-washu_abeta_ratio <-
-  washu_abeta_ratio %>% dplyr::rename(abeta_ratio_non_std = PLASMAAB4240)
-
-washu_abeta_ratio$origin <- "WashU"
-bateman_abeta_ratio$origin <- "Bateman"
-
-abeta_ratio_merged <-
-  rbind.data.frame(
-    washu_abeta_ratio %>% dplyr::filter(QC_STATUS == "Passed") %>%
-      dplyr::select(RID, VISCODE, EXAMDATE, abeta_ratio, origin),
-    bateman_abeta_ratio %>% dplyr::filter(QC_STATUS ==
-                                            "Passed", INSTRUMENT == "Lumos", INJECTION == "a") %>%
-      dplyr::select(RID, VISCODE, EXAMDATE, abeta_ratio, origin)
-  ) %>% dplyr::filter(RID != 999999)
-
-av45 = ADNIMERGE::ucberkeleyav45
-fbb = ADNIMERGE::ucberkeleyfbb
-av45$AV45.DATE = av45$EXAMDATE
-av45 = av45[, c(
-  'RID',
-  'AV45.DATE',
-  'VISCODE',
-  "SUMMARYSUVR_WHOLECEREBNORM",
-  "SUMMARYSUVR_WHOLECEREBNORM_1.11CUTOFF"
-)]
-fbb = ADNIMERGE::ucberkeleyfbb
-fbb$FBB.DATE = fbb$EXAMDATE
-fbb = fbb[, c(
-  'RID',
-  'FBB.DATE',
-  'VISCODE',
-  "SUMMARYSUVR_WHOLECEREBNORM",
-  "SUMMARYSUVR_WHOLECEREBNORM_1.08CUTOFF"
-)]
-d = merge(av45, fbb, by = c('RID', 'VISCODE'), all = T)
-d$Centiloid = 188.22 * d$SUMMARYSUVR_WHOLECEREBNORM.x - 189.16
-d$Centiloid[(is.na(d$Centiloid))] = 157.15 * d$SUMMARYSUVR_WHOLECEREBNORM.y[is.na(d$Centiloid)] -
-  151.87
-d$Cent.DATE = d$AV45.DATE
-d$Cent.DATE[is.na(d$Cent.DATE)] = d$FBB.DATE[is.na(d$Cent.DATE)]
-d$AmyloidPos = d$SUMMARYSUVR_WHOLECEREBNORM_1.11CUTOFF
-d$AmyloidPos[is.na(d$AmyloidPos)] = d$SUMMARYSUVR_WHOLECEREBNORM_1.08CUTOFF[is.na(d$AmyloidPos)]
-d = d[!is.na(d$Centiloid), c('RID', 'Cent.DATE', 'VISCODE', 'Centiloid', 'AmyloidPos')]
-d <- d[order(d$RID, d$Cent.DATE), ]
-d <- d[!duplicated(d[c("RID", "Cent.DATE")]), ]
-d$Cent.DATE <- as.Date(d$Cent.DATE)
-d$EXAMDATE <- as.Date(d$Cent.DATE)
-amyloid_pet <- d
+adni_web_demog <-
+  readr::read_delim("~/Downloads/PTDEMOG.csv") %>% dplyr::filter(VISCODE !=
+                                                                   "f")
 
 adni_merge_demog_uniques <- adni_merge_demog %>%
   dplyr::group_by(RID) %>%
@@ -405,9 +279,9 @@ adni_heart_attack<-
   adni_condition_scrape("heart_attack",c("heart attack","myocardial infarction"))
 
 csf_all_conditions <-
-  adni_condition_merge(upenn_merged_csf_biomarkers, adni_diabetes, "diabetes")
+  adni_condition_merge(upenn_merged_csf_biomarkers, adni_diabetes)
 csf_all_conditions <-
-  adni_condition_merge(csf_all_conditions, adni_ckd, "ckd")
+  adni_condition_merge(csf_all_conditions, adni_ckd)
 csf_all_conditions <-
   adni_condition_merge(csf_all_conditions, adni_dyslipidemia, "dyslipidemia")
 csf_all_conditions <-
@@ -475,73 +349,73 @@ csf_all_conditions$age_at_exam <-
           ) / 12),
         1)
 
-abeta_all_conditions <-
-  adni_condition_merge(abeta_ratio_merged, adni_diabetes, "diabetes")
-abeta_all_conditions <-
+plasma_all_conditions <-
+  adni_condition_merge(plasma_ratio_merged, adni_diabetes, "diabetes")
+plasma_all_conditions <-
   adni_condition_merge(abeta_all_conditions, adni_ckd, "ckd")
-abeta_all_conditions <-
-  adni_condition_merge(abeta_all_conditions, adni_dyslipidemia, "dyslipidemia")
-abeta_all_conditions <-
-  adni_condition_merge(abeta_all_conditions, adni_hypertension, "hypertension")
-abeta_all_conditions <-
-  dplyr::left_join(abeta_all_conditions, adni_lab_data_demog_reduced, by =
+plasma_all_conditions <-
+  adni_condition_merge(plasma_all_conditions, adni_dyslipidemia, "dyslipidemia")
+plasma_all_conditions <-
+  adni_condition_merge(plasma_all_conditions, adni_hypertension, "hypertension")
+plasma_all_conditions <-
+  dplyr::left_join(plasma_all_conditions, adni_lab_data_demog_reduced, by =
                      "RID")
-abeta_all_conditions <-
-  dplyr::left_join(abeta_all_conditions,
+plasma_all_conditions <-
+  dplyr::left_join(plasma_all_conditions,
                    adni_mod_hach %>% dplyr::select(RID, htn_hach),
                    by = "RID")
-abeta_all_conditions <-
+plasma_all_conditions <-
   dplyr::left_join(
-    abeta_all_conditions,
+    plasma_all_conditions,
     adni_vitals %>% dplyr::select(RID, diastolic_bp, systolic_bp, htn_vitals, vitals_date),
     by = "RID"
   )
-abeta_all_conditions$date_diff <-
+plasma_all_conditions$date_diff <-
   ifelse(
-    abeta_all_conditions$EXAMDATE - abeta_all_conditions$vitals_date < 0,
+    plasma_all_conditions$EXAMDATE - plasma_all_conditions$vitals_date < 0,
     999999,
-    abeta_all_conditions$EXAMDATE - abeta_all_conditions$vitals_date
+    plasma_all_conditions$EXAMDATE - plasma_all_conditions$vitals_date
   )
-abeta_all_conditions <- abeta_all_conditions %>%
+plasma_all_conditions <- plasma_all_conditions %>%
   dplyr::group_by(RID, EXAMDATE) %>%
   dplyr::filter(date_diff == min(date_diff))
-abeta_all_conditions$diabetes_joined <-
+plasma_all_conditions$diabetes_joined <-
   ifelse(
-    abeta_all_conditions$diabetes == 1 |
-      abeta_all_conditions$diabetes_cat == "Diabetes",
+    plasma_all_conditions$diabetes == 1 |
+      plasma_all_conditions$diabetes_cat == "Diabetes",
     1,
     0
   )
-abeta_all_conditions$ckd_joined <-
-  ifelse(abeta_all_conditions$ckd == 1 |
-           abeta_all_conditions$ckd_cat == "Suspected CKD",
+plasma_all_conditions$ckd_joined <-
+  ifelse(plasma_all_conditions$ckd == 1 |
+           plasma_all_conditions$ckd_cat == "Suspected CKD",
          1,
          0)
-abeta_all_conditions$dyslipidemia_joined <-
+plasma_all_conditions$dyslipidemia_joined <-
   ifelse(
-    abeta_all_conditions$dyslipidemia == 1 |
-      abeta_all_conditions$dyslipidemia_cat == "Hyperlipidemia",
+    plasma_all_conditions$dyslipidemia == 1 |
+      plasma_all_conditions$dyslipidemia_cat == "Hyperlipidemia",
     1,
     0
   )
-abeta_all_conditions$hypertension_joined <-
+plasma_all_conditions$hypertension_joined <-
   ifelse(
-    abeta_all_conditions$hypertension == 1 |
+    plasma_all_conditions$hypertension == 1 |
       (
-        abeta_all_conditions$htn_vitals == 1 &
-          abeta_all_conditions$date_diff != 9999
-      ) | abeta_all_conditions$htn_hach == 1,
+        plasma_all_conditions$htn_vitals == 1 &
+          plasma_all_conditions$date_diff != 9999
+      ) | plasma_all_conditions$htn_hach == 1,
     1,
     0
   )
-abeta_all_conditions <-
-  dplyr::left_join(abeta_all_conditions, adni_merge_demog_uniques_reduced, by =
+plasma_all_conditions <-
+  dplyr::left_join(plasma_all_conditions, adni_merge_demog_uniques_reduced, by =
                      "RID")
-abeta_all_conditions$age_at_exam <-
-  round(as.numeric(lubridate::year(abeta_all_conditions$EXAMDATE)) -
-          abeta_all_conditions$PTDOBYY +
+plasma_all_conditions$age_at_exam <-
+  round(as.numeric(lubridate::year(plasma_all_conditions$EXAMDATE)) -
+          plasma_all_conditions$PTDOBYY +
           ((
-            as.numeric(lubridate::month(abeta_all_conditions$EXAMDATE)) - abeta_all_conditions$PTDOBMM
+            as.numeric(lubridate::month(plasma_all_conditions$EXAMDATE)) - plasma_all_conditions$PTDOBMM
           ) / 12),
         1)
 
