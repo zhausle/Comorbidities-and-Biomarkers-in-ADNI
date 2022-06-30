@@ -1,4 +1,5 @@
 ## the function flags all tied records in the presence of ties; decide on ties outside of the context of this function
+## function always throws a warning because giving an input with no in-range values for max returns "-Inf"; this is handled
 date_comparison <- function(df,ref_date_col,comp_date_col,grouping_vars,comp_method="nearest",diff_tol_abs=NULL,diff_tol_before=NULL){
   ref_date_quo<-enquo(ref_date_col)
   comp_date_quo<-enquo(comp_date_col)
@@ -38,4 +39,122 @@ date_comparison <- function(df,ref_date_col,comp_date_col,grouping_vars,comp_met
     }
   }
   return(df %>% select(-c(date_diff,max_non_pos_diff,min_abs_diff,min_diff)))
+}
+
+adni_condition_scrape <-
+  function(condition_name,
+           include_words,
+           exclude_words=NULL) {
+    find.package("tidyverse")
+    
+    include_words_case_insensitive <-
+      paste(paste0("(?i)", include_words), collapse = "|")
+    
+    merged_health_scraper$condition <-
+      ifelse(
+        stringr::str_detect(
+          stringr::str_to_lower(merged_health_scraper$desc),
+          include_words_case_insensitive
+        ),
+        1,
+        0
+      )
+    
+    if (!is.null(exclude_words)) {
+      exclude_words_case_insensitive <-
+        paste(paste0("(?i)", exclude_words), collapse = "|")
+      merged_health_scraper$condition <-
+        ifelse(
+          stringr::str_detect(merged_health_scraper$desc, exclude_words_case_insensitive),
+          0,
+          merged_health_scraper$condition
+        )
+    }
+    merged_dates <- merged_health_scraper %>% dplyr::filter(condition==1)
+    
+    merged_dates<-list(df=merged_dates,condition=condition_name)
+    return(merged_dates)
+  }
+
+
+adni_condition_merge <-
+  function(biomarker_data,
+           condition_list,
+           is_chronic=TRUE) {
+    matched_records <-
+      dplyr::left_join(biomarker_data, condition_list$df, by = "RID") ## copy=TRUE must be included because of how the condition looper used later processes dfs
+    condition_name<-condition_list$condition
+    condition_name_enquo<-quo_name(condition_list$condition)
+    
+    matched_records <-date_comparison(matched_records,EXAMDATE,USERDATE,vars(RID,EXAMDATE),comp_method="before") %>% dplyr::filter(retain_flag==1|alt_flag==1) %>% dplyr::select(RID,EXAMDATE,onset,cease,viscode,desc)
+    
+    merged_data <- dplyr::left_join(biomarker_data,matched_records,by=c("RID","EXAMDATE"))
+    
+    merged_data <- merged_data %>% dplyr::mutate(condition=case_when(
+      (is.na(onset)) ~ 0,
+      (is_chronic=FALSE) ~ 1,
+      (is.na(cease) & EXAMDATE>=onset) ~ 1,
+      (!is.na(cease) & EXAMDATE>=onset & EXAMDATE<cease) ~ 1,
+      TRUE ~ 0
+    )) %>% dplyr::rename_with(.cols=c(onset,cease,viscode,desc),.fn = ~ paste0(condition_name,"_",.x))  %>% dplyr::rename((!!condition_name_enquo):=condition)
+    return(merged_data)
+  }
+
+all_conditions_merger <- function(biomarker_df,condition_df_list,chronic_list){
+  df<-adni_condition_merge(biomarker_df,condition_df_list[[1]],chronic_list[1])
+  for (i in 2:(length(condition_df_list))){
+    df<-adni_condition_merge(df,condition_df_list[[i]],chronic_list[i])
+  }
+  return(df)
+}
+
+other_df_join <- function(df){
+  df <-
+    dplyr::left_join(df, adni_lab_data_use, by = "RID")
+  df <-
+    dplyr::left_join(df, adni_mod_hach %>% dplyr::select(RID, htn_hach),by = "RID")
+  df <-
+    dplyr::left_join(
+      df,
+      adni_vitals %>% dplyr::select(RID, diastolic_bp, systolic_bp, htn_vitals, vitals_date),
+      by = "RID")
+  df<-date_comparison(df,EXAMDATE,vitals_date,vars(RID,EXAMDATE),comp_method="before",diff_tol_abs = 120) %>% dplyr::filter(retain_flag==1|alt_flag==1) %>% dplyr::distinct_at(vars(RID,VISCODE),.keep_all = TRUE)
+  df$diabetes_joined <-
+    ifelse(df$diabetes == 1 |
+             df$diabetes_cat == "Diabetes",
+           1,
+           0)
+  df$ckd_joined <-
+    ifelse(df$ckd == 1 |
+             df$ckd_cat == "Suspected CKD",
+           1,
+           0)
+  df$dyslipidemia_joined <-
+    ifelse(
+      df$dyslipidemia == 1 |
+        df$dyslipidemia_cat == "Hyperlipidemia",
+      1,
+      0
+    )
+  df$hypertension_joined <-
+    ifelse(
+      df$hypertension == 1 |
+        df$htn_vitals == 1 | 
+        df$htn_hach == 1,
+      1,
+      0
+    )
+  
+  df <-
+    dplyr::left_join(df, adni_joined_demog_uniques_reduced, by =
+                       "RID")
+  
+  df$age_at_exam <-
+    round(as.numeric(lubridate::year(df$EXAMDATE)) -
+            df$PTDOBYY +
+            ((
+              as.numeric(lubridate::month(df$EXAMDATE)) - df$PTDOBMM
+            ) / 12),
+          1)
+  return(df)
 }
