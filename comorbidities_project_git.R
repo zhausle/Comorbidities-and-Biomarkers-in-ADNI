@@ -21,12 +21,19 @@ adni_heart_attack<-
   adni_condition_scrape("heart_attack",c("heart attack","myocardial infarction"))
 
 list_of_conditions<-list(adni_diabetes,adni_dyslipidemia,adni_ckd,adni_hypertension,adni_stroke,adni_heart_attack)
-condition_is_chronic<-c(TRUE,TRUE,TRUE,TRUE,FALSE,FALSE,FALSE)
+condition_is_chronic<-c(TRUE,TRUE,TRUE,TRUE,FALSE,FALSE)
 
 csf_all_conditions<-all_conditions_merger(upenn_merged_csf_biomarkers,list_of_conditions,condition_is_chronic)
-csf_all_conditions<-csf_all_conditions %>% distinct_at(vars(RID,VISCODE),.keep_all=TRUE)
-csf_all_conditions<-other_df_join(csf_all_conditions)
+csf_all_conditions<-other_df_prep(csf_all_conditions)
 
 plasma_all_conditions<-all_conditions_merger(plasma_merged,list_of_conditions,condition_is_chronic)
-plasma_all_conditions<-plasma_all_conditions %>% distinct_at(vars(RID,VISCODE),.keep_all=TRUE)
-plasma_all_conditions<-other_df_join(plasma_all_conditions)
+plasma_all_conditions<-other_df_prep(plasma_all_conditions)
+
+pet_all_conditions<-all_conditions_merger(amyloid_pet,list_of_conditions,condition_is_chronic)
+pet_all_conditions<-other_df_prep(pet_all_conditions)
+
+plasma_ptau_all_conditions<-all_conditions_merger(plasma_ptau,list_of_conditions,condition_is_chronic)
+plasma_ptau_all_conditions<-other_df_prep(plasma_ptau_all_conditions)
+
+plasma_nfl_all_conditions<-all_conditions_merger(plasma_nfl,list_of_conditions,condition_is_chronic)
+plasma_nfl_all_conditions<-other_df_prep(plasma_nfl_all_conditions)
