@@ -10,10 +10,12 @@ date_comparison <- function(df,ref_date_col,comp_date_col,grouping_vars,comp_met
   if(comp_method=="nearest"){
     if(is.null(diff_tol_abs)){
       df <- df %>% dplyr::group_by(!!!grouping_vars) %>% dplyr::mutate(retain_flag=case_when(
+        (is.na(date_diff)) ~ 1,
         (abs(date_diff)==min_abs_diff) ~ 1,
         (abs(date_diff)!=min_abs_diff) ~ 0))
     } else {
       df <- df %>% dplyr::group_by(!!!grouping_vars) %>% dplyr::mutate(retain_flag=case_when(
+        (is.na(date_diff)) ~ 1,
         (abs(date_diff)==min_abs_diff & min_abs_diff<=diff_tol_abs) ~ 1,
         (abs(date_diff)!=min_abs_diff|min_abs_diff>diff_tol_abs) ~ 0
       ))}
@@ -21,11 +23,13 @@ date_comparison <- function(df,ref_date_col,comp_date_col,grouping_vars,comp_met
   if(comp_method=="before"){
     if(is.null(diff_tol_before)){
       df <- df %>% dplyr::group_by(!!!grouping_vars) %>% dplyr::mutate(retain_flag=case_when(
+        (is.na(date_diff)) ~ 1,
         (is.na(max_non_pos_diff)) ~ 0,
         (date_diff==max_non_pos_diff) ~ 1,
         (date_diff!=max_non_pos_diff) ~ 0))
     } else {
       df <- df %>% dplyr::group_by(!!!grouping_vars) %>% dplyr::mutate(retain_flag=case_when(
+        (is.na(date_diff)) ~ 1,
         (is.na(max_non_pos_diff)) ~ 0,
         (date_diff==min_abs_diff & max_non_pos_diff>=diff_tol_before) ~ 1,
         (date_diff!=max_non_pos_diff|date_diff<diff_tol_before) ~ 0
@@ -92,7 +96,7 @@ adni_condition_merge <-
     
     merged_data <- merged_data %>% dplyr::mutate(condition=case_when(
       (is.na(onset)) ~ 0,
-      (is_chronic=FALSE) ~ 1,
+      (is_chronic==FALSE) ~ 1,
       (is.na(cease) & EXAMDATE>=onset) ~ 1,
       (!is.na(cease) & EXAMDATE>=onset & EXAMDATE<cease) ~ 1,
       TRUE ~ 0
@@ -101,14 +105,19 @@ adni_condition_merge <-
   }
 
 all_conditions_merger <- function(biomarker_df,condition_df_list,chronic_list){
-  df<-adni_condition_merge(biomarker_df,condition_df_list[[1]],chronic_list[1])
-  for (i in 2:(length(condition_df_list))){
-    df<-adni_condition_merge(df,condition_df_list[[i]],chronic_list[i])
+  df<-biomarker_df
+  for (i in 1:(length(condition_df_list))){
+    temp_cond<-condition_df_list[[i]]
+    df<-adni_condition_merge(df,temp_cond,chronic_list[i])
+    gc(reset=TRUE)
+    rm(temp_cond)
+    df<-df %>% distinct_at(vars(RID,VISCODE),.keep_all=TRUE)
+    print(i)
   }
   return(df)
 }
 
-other_df_join <- function(df){
+other_df_prep <- function(df){
   df <-
     dplyr::left_join(df, adni_lab_data_use, by = "RID")
   df <-
@@ -156,5 +165,14 @@ other_df_join <- function(df){
               as.numeric(lubridate::month(df$EXAMDATE)) - df$PTDOBMM
             ) / 12),
           1)
+  
+  df<- df %>% dplyr::mutate(age_exam_cat=cut(age_at_exam,breaks=seq(from=50,to=90,by=5)),age_exam_scaled=age_at_exam/10,eGFR_scaled=eGFR/10)
+  
+  df<-dplyr::left_join(df,adni_diagnoses,by="RID")
+  df<-date_comparison(df,EXAMDATE,dx_date,vars(RID,EXAMDATE),comp_method="before",diff_tol_abs = 60)
+  df<- df %>% dplyr::filter(retain_flag==1|alt_flag==1) %>% dplyr::distinct_at(vars(RID,VISCODE),.keep_all = TRUE)
+  
+  df<- dplyr::left_join(df,adni_apoe,by="RID")
+  
   return(df)
 }
