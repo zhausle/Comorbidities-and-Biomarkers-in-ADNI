@@ -1,5 +1,7 @@
-## would recommend downloading fresh copies of below files from ADNI 
-## as a rule, I try to use .csv instead of ADNImerge because ADNImerge data is labelled and consequently doesn't play well with many functions in R
+library(ADNIMERGE)
+library(tidyverse)
+library(transplantr)
+## would recommend downloading fresh copies of any listed CSVs
 
 init_health<-readr::read_delim("~/Projects/Comorbidities Project/INITHEALTH.csv")
 rec_hist<- readr::read_delim("~/Projects/Comorbidities Project/RECMHIST.csv")
@@ -58,16 +60,25 @@ plasma_merged <- dplyr::bind_rows(
   washu_plasma %>% dplyr::filter(QC_STATUS == "Passed") %>% dplyr::mutate(MS_RUN_DATE=as.Date(MS_RUN_DATE,origin="1970-01-01")),
   bateman_plasma %>% dplyr::filter(QC_STATUS == "Passed", INSTRUMENT == "Lumos", INJECTION == "a")) %>% dplyr::filter(RID != 999999)
 
+## Plasma ptau-181 load-in
+
+plasma_ptau <- 
+  readr::read_delim("~/Projects/Comorbidities Project/UGOTPTAU181_06_18_20.csv") %>% dplyr::select(RID,VISCODE2,EXAMDATE,PLASMAPTAU181) %>% dplyr::rename(VISCODE=VISCODE2,ptau_181=PLASMAPTAU181)
+
+## Plasma NfL load-in
+plasma_nfl <-
+  readr::read_delim("~/Projects/Comorbidities Project/ADNI_BLENNOWPLASMANFLLONG_10_03_18.csv") %>% dplyr::select(RID,VISCODE2,EXAMDATE,PLASMA_NFL) %>% dplyr::rename(VISCODE=VISCODE2,nfl=PLASMA_NFL)
+
 ## PET data load-in
 av45 <- readr::read_delim("~/Projects/Comorbidities Project/UCBERKELEYAV45_04_26_22.csv") %>% 
   dplyr::select(RID,EXAMDATE,VISCODE2,SUMMARYSUVR_WHOLECEREBNORM,SUMMARYSUVR_WHOLECEREBNORM_1.11CUTOFF) %>% 
   dplyr::rename(suvr_summary=SUMMARYSUVR_WHOLECEREBNORM,AmyloidPos=SUMMARYSUVR_WHOLECEREBNORM_1.11CUTOFF) %>%
-  dplyr::mutate(Centiloid = (188.22 * suvr_summary) - 189.16) ## reflects most recent values for AV45 from "Instructions for converting ADNI processing results to Centiloids (PDF)" on LONI
+  dplyr::mutate(Centiloid = (188.22 * suvr_summary) - 189.16,tracer="av45") ## reflects most recent values for AV45 from "Instructions for converting ADNI processing results to Centiloids (PDF)" on LONI
 fbb <- readr::read_delim("~/Projects/Comorbidities Project/UCBERKELEYFBB_04_26_22.csv") %>% 
   dplyr::select(RID,EXAMDATE,VISCODE2,SUMMARYSUVR_WHOLECEREBNORM,SUMMARYSUVR_WHOLECEREBNORM_1.08CUTOFF) %>% 
   dplyr::rename(suvr_summary=SUMMARYSUVR_WHOLECEREBNORM,AmyloidPos=SUMMARYSUVR_WHOLECEREBNORM_1.08CUTOFF) %>%
-  dplyr::mutate(Centiloid = (157.15 * suvr_summary) - 151.87) ## reflects most recent values for FBB from "Instructions for converting ADNI processing results to Centiloids (PDF)" on LONI
-amyloid_pet<-dplyr::full_join(av45,fbb,by=c("RID","VISCODE2"),suffix=c(".av45",".fbb"))
+  dplyr::mutate(Centiloid = (157.15 * suvr_summary) - 151.87,tracer="fbb") ## reflects most recent values for FBB from "Instructions for converting ADNI processing results to Centiloids (PDF)" on LONI
+amyloid_pet<-dplyr::bind_rows(av45,fbb) %>% dplyr::mutate(tracer=as.factor(tracer)) %>% dplyr::rename(VISCODE=VISCODE2)
 
 ## CSF data load-in
 upenn_mk_12 <-readr::read_delim("~/Projects/Comorbidities Project/UPENNBIOMK12_01_04_21.csv")
@@ -79,14 +90,16 @@ upenn_mk_9$ABETA <- ifelse(is.na(upenn_mk_9$ABETA),readr::parse_number(upenn_mk_
 
 upenn_merged_csf_biomarkers <- dplyr::bind_rows(upenn_mk_12,upenn_mk_10,upenn_mk_9)
 upenn_merged_csf_biomarkers <- upenn_merged_csf_biomarkers %>% dplyr::select(-VISCODE) %>% dplyr::rename(VISCODE=VISCODE2)
-upenn_merged_csf_biomarkers <- upenn_merged_csf_biomarkers %>% dplyr::mutate(ABETA=round(ABETA))
+upenn_merged_csf_biomarkers <- upenn_merged_csf_biomarkers %>% dplyr::mutate(ABETA=round(ABETA),ptau_pos=PTAU>24)
 upenn_merged_csf_biomarkers <- upenn_merged_csf_biomarkers %>% dplyr::group_by(RID,EXAMDATE) %>% dplyr::filter(RUNDATE==max(RUNDATE)) %>% dplyr::ungroup()
+
 adni_mod_hach <- ADNIMERGE::modhach %>% dplyr::filter(VISCODE != "f")
 adni_vitals <- ADNIMERGE::vitals %>% dplyr::filter(VISCODE != "f")
 
 adni_web_demog <-
   readr::read_delim("~/Projects/Comorbidities Project/PTDEMOG.csv") %>% dplyr::filter(VISCODE !=
                                                                    "f")
+
 ## Demographic data
 ## I use ADNIMERGE here because the demographic categories are well-labeled in ADNIMERGE but not LONI
 adni_lab_data <- ADNIMERGE::labdata %>% dplyr::filter(VISCODE != "f")
@@ -211,3 +224,22 @@ adni_vitals$htn_vitals <-
            adni_vitals$systolic_bp >= 140,
          1,
          0)
+
+## Diagnostic info load-in
+
+adni_diagnoses<-ADNIMERGE::adnimerge %>% 
+  dplyr::mutate(RID=as.numeric(RID)) %>%
+  dplyr::select(RID,DX,DX.bl,EXAMDATE) %>% dplyr::rename(dx_date=EXAMDATE) %>%
+  dplyr::mutate(DX.baseline = case_when(
+    (DX.bl %in% c("EMCI","LMCI")) ~ "MCI",
+    (DX.bl %in% c("SMC","CN")) ~ "CN",
+    (DX.bl == "AD" ~ "AD")
+  )) %>%
+  dplyr::filter(!is.na(DX))
+
+## APOE info load-in
+adni_apoe<-ADNIMERGE::adnimerge %>% 
+  dplyr::mutate(RID=as.numeric(RID)) %>%
+  dplyr::select(RID,APOE4) %>% dplyr::mutate(apoe_status=(APOE4>0)) %>%
+  dplyr::filter(!is.na(APOE4)) %>%
+  dplyr::distinct_at(vars(RID),.keep_all = TRUE)
