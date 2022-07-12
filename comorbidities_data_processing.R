@@ -1,6 +1,7 @@
 library(ADNIMERGE)
 library(tidyverse)
-library(transplantr)
+library(transplantr) ## used to calculate eGFR
+
 ## would recommend downloading fresh copies of any listed CSVs
 
 init_health<-readr::read_delim("~/Projects/Comorbidities Project/INITHEALTH.csv")
@@ -46,30 +47,46 @@ init_health_scraper <- init_health %>%
 merged_health_scraper<- dplyr::bind_rows(rec_hist_scraper,init_health_scraper)
 
 ## Plasma data load-in
+## Removed records w/ BATCH_N = "Batch #00 Trial" from Bateman because they were duplicates
+
 bateman_plasma <-
-  readr::read_delim("~/Projects/Comorbidities Project/batemanlab_20190621.csv")
+  readr::read_delim("~/Projects/Comorbidities Project/batemanlab_20190621.csv") %>% dplyr::rename(abeta_ratio = RATIO_ABETA42_40_BY_ISTD_TOUSE) %>% dplyr::mutate(origin="Bateman",flag=n()>1) %>% dplyr::filter(!(BATCH_N=="Batch #00 Trial" & flag>0))
 washu_plasma <-
   readr::read_delim("~/Projects/Comorbidities Project/PLASMA_ABETA_PROJECT_WASH_U_11_05_21.csv")
 
 bateman_plasma <-
-  bateman_plasma %>% dplyr::rename(abeta_ratio = RATIO_ABETA42_40_BY_ISTD_TOUSE) %>% dplyr::mutate(origin="Bateman")
+  bateman_plasma 
 washu_plasma <-
   washu_plasma %>% dplyr::rename(abeta_ratio = STANDARDIZED_PLASMAAB4240,abeta_ratio_non_std = PLASMAAB4240) %>% dplyr::mutate(origin="WashU")
 
+## Bateman typically has three runs - chose Lumos with injection site a because the other was listed as an alt. injection site
+## Chose Lumos as instrument as preference because it had largest N
 plasma_merged <- dplyr::bind_rows(
   washu_plasma %>% dplyr::filter(QC_STATUS == "Passed") %>% dplyr::mutate(MS_RUN_DATE=as.Date(MS_RUN_DATE,origin="1970-01-01")),
   bateman_plasma %>% dplyr::filter(QC_STATUS == "Passed", INSTRUMENT == "Lumos", INJECTION == "a")) %>% dplyr::filter(RID != 999999)
 
 ## Plasma ptau-181 load-in
-
+## Longitudinal data
+## Had some subjects with two measurements at a given visit; averaged two measurements for those subjects
 plasma_ptau <- 
   readr::read_delim("~/Projects/Comorbidities Project/UGOTPTAU181_06_18_20.csv") %>% dplyr::select(RID,VISCODE2,EXAMDATE,PLASMAPTAU181) %>% dplyr::rename(VISCODE=VISCODE2,ptau_181=PLASMAPTAU181)
+plasma_ptau <- plasma_ptau %>% dplyr::group_by(RID,EXAMDATE) %>% dplyr::mutate(ptau_181=mean(ptau_181)) %>% dplyr::distinct_at(vars(RID,EXAMDATE),.keep_all = TRUE) 
+
+plasma_ptau <- plasma_ptau %>% dplyr::arrange(RID,EXAMDATE) %>% dplyr::group_by(RID) %>% dplyr::mutate(ptau_change_from_bl=ptau_181-ptau_181[1L]) %>% dplyr::ungroup()
+
+plasma_ptau %>% dplyr::group_by(RID) %>% dplyr::summarize(count=n()) %>% dplyr::group_by(count) %>% dplyr::summarize(metacount=n())
 
 ## Plasma NfL load-in
+## Had some subjects with two measurements at a given visit; averaged two measurements for those subjects
 plasma_nfl <-
   readr::read_delim("~/Projects/Comorbidities Project/ADNI_BLENNOWPLASMANFLLONG_10_03_18.csv") %>% dplyr::select(RID,VISCODE2,EXAMDATE,PLASMA_NFL) %>% dplyr::rename(VISCODE=VISCODE2,nfl=PLASMA_NFL)
+plasma_nfl <- plasma_nfl %>% dplyr::group_by(RID,EXAMDATE) %>% dplyr::mutate(nfl=mean(nfl)) %>% dplyr::distinct_at(vars(RID,EXAMDATE),.keep_all = TRUE) 
+
+plasma_nfl <- plasma_nfl %>% dplyr::arrange(RID,EXAMDATE) %>% dplyr::group_by(RID) %>% dplyr::mutate(nfl_change_from_bl=nfl-nfl[1L]) %>% dplyr::ungroup()
+
 
 ## PET data load-in
+## Adapted from Adam's code
 av45 <- readr::read_delim("~/Projects/Comorbidities Project/UCBERKELEYAV45_04_26_22.csv") %>% 
   dplyr::select(RID,EXAMDATE,VISCODE2,SUMMARYSUVR_WHOLECEREBNORM,SUMMARYSUVR_WHOLECEREBNORM_1.11CUTOFF) %>% 
   dplyr::rename(suvr_summary=SUMMARYSUVR_WHOLECEREBNORM,AmyloidPos=SUMMARYSUVR_WHOLECEREBNORM_1.11CUTOFF) %>%
@@ -93,21 +110,18 @@ upenn_merged_csf_biomarkers <- upenn_merged_csf_biomarkers %>% dplyr::select(-VI
 upenn_merged_csf_biomarkers <- upenn_merged_csf_biomarkers %>% dplyr::mutate(ABETA=round(ABETA),ptau_pos=PTAU>24)
 upenn_merged_csf_biomarkers <- upenn_merged_csf_biomarkers %>% dplyr::group_by(RID,EXAMDATE) %>% dplyr::filter(RUNDATE==max(RUNDATE)) %>% dplyr::ungroup()
 
+## Hachinski and vitals
 adni_mod_hach <- ADNIMERGE::modhach %>% dplyr::filter(VISCODE != "f")
 adni_vitals <- ADNIMERGE::vitals %>% dplyr::filter(VISCODE != "f")
 
-adni_web_demog <-
-  readr::read_delim("~/Projects/Comorbidities Project/PTDEMOG.csv") %>% dplyr::filter(VISCODE !=
-                                                                   "f")
 
-## Demographic data
+## Demographics
 ## I use ADNIMERGE here because the demographic categories are well-labeled in ADNIMERGE but not LONI
-adni_lab_data <- ADNIMERGE::labdata %>% dplyr::filter(VISCODE != "f")
+## Still need web data because ADNIMERGE doesn't have month and year of birth
 adni_merge_demog <- ADNIMERGE::ptdemog %>% dplyr::filter(VISCODE != "f")
 adni_web_demog <-
   readr::read_delim("~/Projects/Comorbidities Project/PTDEMOG.csv") %>% dplyr::filter(VISCODE !=
-                                                                   "f")
-
+                                                                                        "f")
 adni_merge_demog_uniques <- adni_merge_demog %>%
   dplyr::distinct_at(vars(RID),.keep_all=TRUE)
 
@@ -127,6 +141,7 @@ adni_joined_demog_uniques_reduced <-
 
 ## Lab data load-in
 ## This is somewhat involved because I needed to calculate eGFR for CKD, which depends on age, gender, and race
+adni_lab_data <- ADNIMERGE::labdata %>% dplyr::filter(VISCODE != "f")
 
 adni_lab_data_demog_reduced <-
   dplyr::left_join(adni_lab_data,adni_joined_demog_uniques_reduced,by = "RID",suffix = c(".labs", ".demos"))
@@ -138,10 +153,12 @@ adni_lab_data_demog_reduced <-
     cholesterol = as.numeric(RCT20)
   )
 
+adni_lab_data_demog_reduced <-adni_lab_data_demog_reduced %>% dplyr::filter(!(is.na(creatinine)|is.na(glucose)|is.na(cholesterol)))
+
 adni_lab_data_demog_reduced$age_at_lab <-round(as.numeric(lubridate::year(adni_lab_data_demog_reduced$EXAMDATE)) -
-    adni_lab_data_demog_reduced$PTDOBYY +
-    ((as.numeric(lubridate::month(adni_lab_data_demog_reduced$EXAMDATE)) - 
-        adni_lab_data_demog_reduced$PTDOBMM) / 12), digits=1)
+                                                 adni_lab_data_demog_reduced$PTDOBYY +
+                                                 ((as.numeric(lubridate::month(adni_lab_data_demog_reduced$EXAMDATE)) - 
+                                                     adni_lab_data_demog_reduced$PTDOBMM) / 12), digits=1)
 
 adni_lab_data_demog_reduced$race_for_egfr <-
   ifelse(
@@ -165,6 +182,9 @@ adni_lab_data_demog_reduced$eGFR <-
     adni_lab_data_demog_reduced$race_for_egfr,
     units = "US"
   )
+
+## Text strings for NAs are to avoid missing labs causing an error in regression analyses
+## Should consider improving by either imputing lab values (if subjects have some lab results but not all) or just NAing subjects without labs (if some subjects have no lab results)
 
 adni_lab_data_demog_reduced <- adni_lab_data_demog_reduced %>% dplyr::mutate(eGFR_cat = with(.,case_when(
   (eGFR>90)~"Greater than 90",
@@ -218,6 +238,8 @@ adni_vitals <-
     diastolic_bp = as.numeric(VSBPDIA),
     systolic_bp = as.numeric(VSBPSYS),
     vitals_date = USERDATE) 
+
+adni_vitals <- adni_vitals %>% dplyr::filter(!(is.na(systolic_bp)|is.na(diastolic_bp)))
 
 adni_vitals$htn_vitals <-
   ifelse(adni_vitals$diastolic_bp >= 90 |
