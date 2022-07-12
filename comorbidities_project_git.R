@@ -26,8 +26,8 @@ condition_is_chronic<-c(TRUE,TRUE,TRUE,TRUE,FALSE,FALSE)
 csf_all_conditions<-all_conditions_merger(upenn_merged_csf_biomarkers,list_of_conditions,condition_is_chronic)
 csf_all_conditions<-other_df_prep(csf_all_conditions)
 
-plasma_all_conditions<-all_conditions_merger(plasma_merged,list_of_conditions,condition_is_chronic)
-plasma_all_conditions<-other_df_prep(plasma_all_conditions)
+plasma_abeta_all_conditions<-all_conditions_merger(plasma_merged,list_of_conditions,condition_is_chronic)
+plasma_abeta_all_conditions<-other_df_prep(plasma_abeta_all_conditions)
 
 pet_all_conditions<-all_conditions_merger(amyloid_pet,list_of_conditions,condition_is_chronic)
 pet_all_conditions<-other_df_prep(pet_all_conditions)
