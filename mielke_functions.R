@@ -1,3 +1,15 @@
+biomarker_response_join<-function(biomarker_data,response_data,biomarker,response){
+  
+  biomarker_enquo=enquo(biomarker)
+  response_enquo=enquo(response)
+  
+  joined_data<-dplyr::left_join(biomarker_data, response_data %>% dplyr::select(RID,EXAMDATE,!!response_enquo) %>% rename(response_date=EXAMDATE),by="RID") 
+  joined_data<-date_comparison(joined_data,EXAMDATE,response_date,vars(RID,EXAMDATE),comp_method="before",diff_tol_abs = 60) %>% dplyr::filter(retain_flag==1|alt_flag==1)
+  joined_data<-joined_data %>% dplyr::distinct_at(vars(RID,VISCODE),.keep_all = TRUE)
+  joined_data<-joined_data %>% dplyr::ungroup() %>% dplyr::mutate(biomarker_z_scaled=((!!biomarker_enquo-mean(!!biomarker_enquo,na.rm=TRUE)))/sd(!!biomarker_enquo,na.rm=TRUE))
+  return(joined_data)
+}
+
 mielke_analysis_age_bin <- function(data,biomarker,response){
   biomarker_enquo<-enquo(biomarker)
   response_enquo<-enquo(response)
@@ -43,16 +55,6 @@ mielke_analysis_cutpoints <- function(data,biomarker,response){
   return(results)
 }
 
-mielke_analysis_roc_and_measure_outer <- function(data,biomarker,response){
-  model<-glm(as.factor(response)~biomarker,family=binomial,data=data)
-  roc<-ROCit::rocit(score=qlogis(model$fitted.values),class=model$y)
-  measure<-ROCit::measureit(score=qlogis(model$fitted.values),class=model$y,
-                            measure=c("ACC","SENS","SPEC","PPV","NPV"))
-  results<-list(model,roc,measure)
-  print(plot(roc))
-  return(results)
-}
-
 mielke_analysis_roc_and_measure_inner <- function(formula,data){
   model<-glm(formula,family=binomial,data=data)
   roc<-ROCit::rocit(score=qlogis(model$fitted.values),class=model$y)
@@ -72,13 +74,14 @@ mielke_analysis_roc_and_measure_outer <- function(data,biomarker,response){
   adj_formula<-paste0(response," ~ ",paste(biomarker,"age_at_exam","PTGENDER","apoe_status",sep=" + "))
   adj_formula_w_comorbidities<-paste0(response," ~ ",paste(biomarker,"age_at_exam","PTGENDER",
                                                            "dyslipidemia_joined","ckd_joined","hypertension_joined","diabetes_joined","apoe_status",sep=" + "))
-  
+  adj_formula_w_comorbidities_labs<-paste0(response," ~ ",paste(biomarker,"age_at_exam","PTGENDER",
+                                                           "dyslipidemia_cat","ckd_cat","htn_vitals","diabetes_cat","apoe_status",sep=" + "))
   unadj<-mielke_analysis_roc_and_measure_inner(unadj_formula,data)
   adj<-mielke_analysis_roc_and_measure_inner(adj_formula,data)
   adj_comorbidities<-mielke_analysis_roc_and_measure_inner(adj_formula_w_comorbidities,data)
-  
-  results<-list(unadj,adj,adj_comorbidities)
-  results<-set_names(results,c("Unadjusted","Adjusted for Age & Sex","Adjusted for Age, Sex, and Comorbidities"))
+  adj_comorbidities_labs<-mielke_analysis_roc_and_measure_inner(adj_formula_w_comorbidities_labs,data)
+  results<-list(unadj,adj,adj_comorbidities,adj_comorbidities_labs)
+  results<-set_names(results,c("Unadjusted","Adjusted for Age & Sex","Adjusted for Age, Sex, and Comorbidities","Adjusted for Age, Sex, and Comorbidities (Labs Only)"))
   return(results)}
 
 mielke_analysis_univariate_analyses <- function(data,biomarker,response){
