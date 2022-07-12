@@ -3,7 +3,7 @@
 date_comparison <- function(df,ref_date_col,comp_date_col,grouping_vars,comp_method="nearest",diff_tol_abs=NULL,diff_tol_before=NULL){
   ref_date_quo<-enquo(ref_date_col)
   comp_date_quo<-enquo(comp_date_col)
-  df <- df %>% dplyr::mutate(date_diff=!!ref_date_quo-!!comp_date_quo,alt_flag=0,retain_flag=0)
+  df <- df %>% dplyr::mutate(date_diff=!!comp_date_quo-!!ref_date_quo,alt_flag=0,retain_flag=0)
   df <- df %>% dplyr::group_by(!!!grouping_vars) %>%
     dplyr::mutate(max_non_pos_diff=max(date_diff[which(date_diff<=0)]),min_abs_diff=min(abs(date_diff)),min_diff=min(date_diff))
   df$max_non_pos_diff<-ifelse(df$max_non_pos_diff=="-Inf",NA,df$max_non_pos_diff)
@@ -127,7 +127,7 @@ other_df_prep <- function(df){
       df,
       adni_vitals %>% dplyr::select(RID, diastolic_bp, systolic_bp, htn_vitals, vitals_date),
       by = "RID")
-  df<-date_comparison(df,EXAMDATE,vitals_date,vars(RID,EXAMDATE),comp_method="before",diff_tol_abs = 120) %>% dplyr::filter(retain_flag==1|alt_flag==1) %>% dplyr::distinct_at(vars(RID,VISCODE),.keep_all = TRUE)
+  df<-date_comparison(df,EXAMDATE,vitals_date,vars(RID,EXAMDATE),comp_method="before",diff_tol_abs = 120) %>% dplyr::filter(retain_flag==1|alt_flag==1|is.na(retain_flag)) %>% dplyr::distinct_at(vars(RID,VISCODE),.keep_all = TRUE)
   df$diabetes_joined <-
     ifelse(df$diabetes == 1 |
              df$diabetes_cat == "Diabetes",
@@ -170,7 +170,7 @@ other_df_prep <- function(df){
   
   df<-dplyr::left_join(df,adni_diagnoses,by="RID")
   df<-date_comparison(df,EXAMDATE,dx_date,vars(RID,EXAMDATE),comp_method="before",diff_tol_abs = 60)
-  df<- df %>% dplyr::filter(retain_flag==1|alt_flag==1) %>% dplyr::distinct_at(vars(RID,VISCODE),.keep_all = TRUE)
+  df<- df %>% dplyr::filter(retain_flag==1|alt_flag==1|is.na(retain_flag)) %>% dplyr::distinct_at(vars(RID,EXAMDATE),.keep_all = TRUE)
   
   df<- dplyr::left_join(df,adni_apoe,by="RID")
   
