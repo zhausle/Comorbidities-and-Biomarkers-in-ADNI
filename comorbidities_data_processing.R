@@ -84,6 +84,7 @@ plasma_nfl <- plasma_nfl %>% dplyr::group_by(RID,EXAMDATE) %>% dplyr::mutate(nfl
 
 plasma_nfl <- plasma_nfl %>% dplyr::arrange(RID,EXAMDATE) %>% dplyr::group_by(RID) %>% dplyr::mutate(nfl_change_from_bl=nfl-nfl[1L]) %>% dplyr::ungroup()
 
+plasma_nfl %>% dplyr::group_by(RID) %>% dplyr::summarize(count=n()) %>% dplyr::group_by(count) %>% dplyr::summarize(metacount=n())
 
 ## PET data load-in
 ## Adapted from Adam's code
@@ -150,7 +151,7 @@ adni_lab_data_demog_reduced <-
   adni_lab_data_demog_reduced %>% mutate(
     glucose = as.numeric(RCT11),
     creatinine = as.numeric(RCT392),
-    cholesterol = as.numeric(RCT20)
+    cholesterol = as.numeric(RCT20),
   )
 
 adni_lab_data_demog_reduced <-adni_lab_data_demog_reduced %>% dplyr::filter(!(is.na(creatinine)|is.na(glucose)|is.na(cholesterol)))
