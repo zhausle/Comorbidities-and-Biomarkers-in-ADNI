@@ -166,7 +166,7 @@ other_df_prep <- function(df){
             ) / 12),
           1)
   
-  df<- df %>% dplyr::mutate(age_exam_cat=cut(age_at_exam,breaks=seq(from=50,to=90,by=5)),age_exam_scaled=age_at_exam/10,eGFR_scaled=eGFR/10)
+  df <- df %>% dplyr::mutate(age_exam_cat=cut(age_at_exam,breaks=seq(from=50,to=90,by=5)),age_exam_scaled=age_at_exam/10,eGFR_scaled=eGFR/10,age_exam_scaled_for_glmm=scale(age_at_exam))
   
   df<-dplyr::left_join(df,adni_diagnoses,by="RID")
   df<-date_comparison(df,EXAMDATE,dx_date,vars(RID,EXAMDATE),comp_method="before",diff_tol_abs = 60)
